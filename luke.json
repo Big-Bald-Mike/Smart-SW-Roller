@@ -1,0 +1,25 @@
+{
+    "name": "Luke Skywalker",
+    "template": "Jedi",
+    "attributes": {
+        "dexterity": "3D",
+        "knowledge": "3D+2",
+        "mechanical": "2D",
+        "perception": "4D",
+        "strength": "2D+1",
+        "technical": "2D"
+    },
+    "skills": {
+        "lightsaber": "5D",
+        "piloting": "4D+2",
+        "force_control": "3D",
+        "force_sense": "3D",
+        "force_alter": "3D"
+    },
+    "force_points": 3,
+    "character_points": 10,
+    "dark_side_points": 0,
+    "force_sensitive": true,
+    "equipment": ["Lightsaber", "Blaster Pistol"],
+    "credits": 500
+}

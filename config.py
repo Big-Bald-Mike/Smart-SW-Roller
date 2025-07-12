@@ -1,6 +1,10 @@
 import os
 from typing import Optional
 
+from dotenv import load_dotenv  # Add this line
+
+load_dotenv()  # And this line
+
 # =============================================================================
 # Discord Bot Configuration
 # =============================================================================

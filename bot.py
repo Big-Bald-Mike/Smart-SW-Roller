@@ -87,7 +87,7 @@ async def add_sheet(ctx, *, sheet_data=None):
         try:
             if sheet_data.strip().startswith('{'):
                 # JSON data
-                character = parser._parse_generic_json(json.loads(sheet_data))
+                character = parser.parse_json_content(sheet_data)
             else:
                 # Plain text
                 character = parser.parse_text_sheet(sheet_data)
