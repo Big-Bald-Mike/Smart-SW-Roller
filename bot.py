@@ -2,6 +2,7 @@ import discord
 from discord.ext import commands
 import json
 import re
+import shlex
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from models import Base, User, CharacterSheet, SharedSheet
@@ -247,24 +248,33 @@ async def share_sheet(ctx, sheet_id: int, user: discord.Member):
         session.close()
 
 @bot.command(name='roll', help='Roll dice for a skill or attribute')
-async def roll_dice(ctx, sheet_id: int, skill_or_attribute: str):
+async def roll_dice(ctx, *, args):
     """Roll dice for a character's skill or attribute"""
     session = Session()
     try:
-        # Check permissions
-        can_view, sheet = can_view_sheet(session, ctx.author.id, sheet_id)
-        
-        # GMs can roll for any sheet
-        if not can_view and is_gm(ctx.author):
-            sheet = session.query(CharacterSheet).filter_by(id=sheet_id).first()
-            can_view = True
-        
-        if not can_view or not sheet:
-            await ctx.send("You don't have permission to use this character sheet, or it doesn't exist.")
+        # Use shlex to split arguments, supporting quoted names and multi-word skills
+        try:
+            parts = shlex.split(args)
+            if len(parts) < 2:
+                raise ValueError
+            character_name = parts[0]
+            skill = ' '.join(parts[1:])
+        except ValueError:
+            await ctx.send("Invalid argument. Use !help roll for usage.")
+            return
+
+        user = session.query(User).filter_by(discord_id=str(ctx.author.id)).first()
+        if not user:
+            await ctx.send("User not found in database.")
+            return
+
+        sheet = session.query(CharacterSheet).filter_by(user_id=user.id, character_name=character_name).first()
+        if not sheet:
+            await ctx.send(f"Character '{character_name}' not found.")
             return
         
         data = sheet.data
-        skill_name = skill_or_attribute.lower().replace(' ', '_')
+        skill_name = skill.lower().replace(' ', '_')
         
         # Check if it's a skill first
         dice_code = None
@@ -283,7 +293,7 @@ async def roll_dice(ctx, sheet_id: int, skill_or_attribute: str):
                 dice_code = parser.calculate_untrained_skill_from_data(data, skill_name)
                 roll_type = f"{skill_name.replace('_', ' ').title()} (untrained)"
             else:
-                await ctx.send(f"Skill or attribute '{skill_or_attribute}' not found for {data['name']}.")
+                await ctx.send(f"Skill or attribute '{skill}' not found for {data['name']}.")
                 return
         
         # Roll the dice
@@ -347,6 +357,7 @@ async def help_starwars(ctx):
     `!sharesheet <id> @user` - Share a sheet with another user
     `!roll <id> <skill/attribute>` - Roll dice for a skill or attribute
     `!deletesheet <id>` - Delete one of your character sheets
+    `!listskills` - List all available skills by attribute
     """
     
     embed.add_field(name="Commands", value=commands_text, inline=False)
@@ -364,6 +375,63 @@ async def help_starwars(ctx):
     )
     
     await ctx.send(embed=embed)
+
+@bot.command(name='listskills', help='List all available skills organized by attribute')
+async def list_skills(ctx):
+    """List all skills organized by governing attribute"""
+    try:
+        embed = discord.Embed(
+            title="🌟 WEG Star Wars Skills by Attribute",
+            description="All available skills organized by their governing attributes",
+            color=0x0099ff
+        )
+        
+        # Get skill categories from parser
+        for attribute, skills in parser.skill_categories.items():
+            # Format skill names (replace underscores with spaces, title case)
+            formatted_skills = [skill.replace('_', ' ').title() for skill in skills]
+            
+            # Split into chunks if too many skills (Discord embed field limit is 1024 chars)
+            skill_text = ", ".join(formatted_skills)
+            
+            if len(skill_text) > 1024:
+                # Split into multiple fields if too long
+                chunks = []
+                current_chunk = []
+                current_length = 0
+                
+                for skill in formatted_skills:
+                    skill_with_comma = skill + ", "
+                    if current_length + len(skill_with_comma) > 1020:  # Leave some buffer
+                        chunks.append(", ".join(current_chunk))
+                        current_chunk = [skill]
+                        current_length = len(skill_with_comma)
+                    else:
+                        current_chunk.append(skill)
+                        current_length += len(skill_with_comma)
+                
+                if current_chunk:
+                    chunks.append(", ".join(current_chunk))
+                
+                # Add multiple fields for this attribute
+                for i, chunk in enumerate(chunks):
+                    field_name = f"{attribute.capitalize()}" if i == 0 else f"{attribute.capitalize()} (cont.)"
+                    embed.add_field(name=field_name, value=chunk, inline=False)
+            else:
+                # Single field for this attribute
+                embed.add_field(
+                    name=f"{attribute.capitalize()}",
+                    value=skill_text,
+                    inline=False
+                )
+        
+        # Add footer with usage info
+        embed.set_footer(text="Use these skill names with !roll <sheet_id> <skill_name>")
+        
+        await ctx.send(embed=embed)
+        
+    except Exception as e:
+        await ctx.send(f"An error occurred: {str(e)}")
 
 # Error handling
 @bot.event

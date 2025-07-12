@@ -304,3 +304,14 @@ class DatabaseManager:
         self.session.add(roll)
         self.session.commit()
         return roll
+    
+    def get_sheet_by_name(self, discord_id, character_name):
+        """Get character sheet by name for a specific user"""
+        user = self.get_user_by_discord_id(discord_id)
+        if user:
+            return (
+                self.session.query(CharacterSheet)
+                .filter_by(user_id=user.id, character_name=character_name, is_active=True)
+                .first()
+            )
+        return None
