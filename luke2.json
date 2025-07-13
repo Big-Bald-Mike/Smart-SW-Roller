@@ -14,7 +14,8 @@
         "piloting": "4D+2",
         "force_control": "3D",
         "force_sense": "3D",
-        "force_alter": "3D"
+        "force_alter": "3D",
+        "first_aid": "2D+1"
     },
     "force_points": 3,
     "character_points": 10,

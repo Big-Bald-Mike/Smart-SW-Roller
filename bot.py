@@ -58,6 +58,19 @@ def can_view_sheet(session, requesting_user_id, sheet_id):
     
     return False, sheet
 
+def get_sheet_by_name(session, ctx, character_name):
+    """Get a character sheet by name for the user or GM."""
+    # Try to get the user's own sheet first
+    user = get_or_create_user(session, ctx.author.id, ctx.author.name)
+    sheet = session.query(CharacterSheet).filter_by(user_id=user.id, character_name=character_name).first()
+    if sheet:
+        return sheet
+    # If not found, allow GM to access any sheet by name
+    if is_gm(ctx.author):
+        sheet = session.query(CharacterSheet).filter_by(character_name=character_name).first()
+        return sheet
+    return None
+
 @bot.event
 async def on_ready():
     print(f'{bot.user} has connected to Discord!')
@@ -150,23 +163,16 @@ async def list_sheets(ctx):
     finally:
         session.close()
 
-@bot.command(name='viewsheet', help='View a character sheet by ID')
-async def view_sheet(ctx, sheet_id: int):
+@bot.command(name='viewsheet', help='View a character sheet by name')
+async def view_sheet(ctx, *, character_name: str):
     """View a character sheet"""
     session = Session()
     try:
-        # Check permissions
-        can_view, sheet = can_view_sheet(session, ctx.author.id, sheet_id)
-        
-        # GMs can view any sheet
-        if not can_view and is_gm(ctx.author):
-            sheet = session.query(CharacterSheet).filter_by(id=sheet_id).first()
-            can_view = True
-        
-        if not can_view or not sheet:
-            await ctx.send("You don't have permission to view this character sheet, or it doesn't exist.")
+        sheet = get_sheet_by_name(session, ctx, character_name)
+        if not sheet:
+            await ctx.send(f"Character sheet '{character_name}' not found or you do not have permission to view it.")
             return
-        
+
         data = sheet.data
         
         # Create embed with character info
@@ -209,39 +215,37 @@ async def view_sheet(ctx, sheet_id: int):
         session.close()
 
 @bot.command(name='sharesheet', help='Share a character sheet with another user')
-async def share_sheet(ctx, sheet_id: int, user: discord.Member):
+async def share_sheet(ctx, character_name: str, user: discord.Member):
     """Share a character sheet with another user"""
     session = Session()
     try:
-        # Check if user owns the sheet
-        sheet = session.query(CharacterSheet).filter_by(id=sheet_id).first()
-        if not sheet or sheet.user.discord_id != str(ctx.author.id):
-            await ctx.send("You can only share your own character sheets.")
+        sheet = get_sheet_by_name(session, ctx, character_name)
+        if not sheet:
+            await ctx.send(f"Character sheet '{character_name}' not found or you do not have permission to share it.")
             return
-        
+
         # Get or create the target user
         target_user = get_or_create_user(session, user.id, user.name)
-        
+
         # Check if already shared
         existing_share = session.query(SharedSheet).filter_by(
-            sheet_id=sheet_id,
+            sheet_id=sheet.id,
             shared_with_discord_id=str(user.id)
         ).first()
-        
+
         if existing_share:
             await ctx.send(f"Character sheet is already shared with {user.mention}.")
             return
-        
+
         # Create share record
         share = SharedSheet(
-            sheet_id=sheet_id,
+            sheet_id=sheet.id,
             shared_with_discord_id=str(user.id)
         )
         session.add(share)
         session.commit()
-        
+
         await ctx.send(f"✅ Character sheet '{sheet.character_name}' has been shared with {user.mention}!")
-        
     except Exception as e:
         await ctx.send(f"An error occurred: {str(e)}")
     finally:
@@ -274,38 +278,63 @@ async def roll_dice(ctx, *, args):
             return
         
         data = sheet.data
-        skill_name = skill.lower().replace(' ', '_')
-        
-        # Check if it's a skill first
-        dice_code = None
-        roll_type = None
-        
-        if skill_name in data['skills']:
-            dice_code = data['skills'][skill_name]
-            roll_type = f"{skill_name.replace('_', ' ').title()} skill"
-        elif skill_name in data['attributes']:
-            dice_code = data['attributes'][skill_name]
-            roll_type = f"{skill_name.capitalize()} attribute"
+        skill_key = find_skill_key(data['skills'], skill)
+        if skill_key:
+            dice_code = data['skills'][skill_key]
+            roll_type = f"{skill_key.replace('_', ' ').title()} skill"
+        elif skill.lower().replace(' ', '_') in data['attributes']:
+            dice_code = data['attributes'][skill.lower().replace(' ', '_')]
+            roll_type = f"{skill.title()} attribute"
         else:
             # Check if it's an untrained skill
-            governing_attr = parser.get_skill_attribute(skill_name)
-            if governing_attr in data['attributes']:
-                dice_code = parser.calculate_untrained_skill_from_data(data, skill_name)
-                roll_type = f"{skill_name.replace('_', ' ').title()} (untrained)"
+            attributes = {k.lower(): v for k, v in data['attributes'].items()}
+            governing_attr = parser.get_skill_attribute(skill)
+            if governing_attr and governing_attr.lower() in attributes:
+                dice_code = parser.calculate_untrained_skill_from_data(data, skill)
+                roll_type = f"{skill.title()} (untrained)"
             else:
                 await ctx.send(f"Skill or attribute '{skill}' not found for {data['name']}.")
                 return
         
         # Roll the dice
         result = dice_roller.roll(dice_code)
-        
+
+        # Assume result['wild_die'] contains the wild die value (add this to your dice roller if needed)
+        wild_die = result.get('wild_die_result')
+        total = result['total']
+
+        # Default color and result formatting
+        embed_color = 0x0099ff  # fallback blue
+        result_str = f"**{total}**"  # Bold, default color
+
+        if wild_die == 1:
+            embed_color = 0xff0000  # Red
+        elif 1 <= total <= 5:
+            embed_color = 0xff69b4  # Pink
+        elif 6 <= total <= 10:
+            embed_color = 0x3399ff  # Blue
+        elif 11 <= total <= 15:
+            embed_color = 0x33cc33  # Green
+        elif 16 <= total <= 20:
+            embed_color = 0xffff00  # Yellow
+        elif 21 <= total <= 30:
+            embed_color = 0xffffff  # White
+        elif total > 30:
+            embed_color = 0x800080  # Purple
+
+        # If wild die is 6, make the result numbers green text (using Discord markdown)
+        if wild_die and wild_die > 5:
+            result_str = f"```diff\n+{total}\n```"  # Green text in Discord
+        else:
+            result_str = f"**{total}**"  # Bold, default color
+
         embed = discord.Embed(
             title=f"🎲 Dice Roll for {data['name']}",
-            color=0xff6600
+            color=embed_color
         )
         embed.add_field(name="Roll Type", value=roll_type, inline=True)
         embed.add_field(name="Dice Code", value=dice_code, inline=True)
-        embed.add_field(name="Result", value=f"**{result['total']}**", inline=True)
+        embed.add_field(name="Result", value=result_str, inline=True)
         embed.add_field(name="Breakdown", value=result['breakdown'], inline=False)
         
         await ctx.send(embed=embed)
@@ -316,26 +345,20 @@ async def roll_dice(ctx, *, args):
         session.close()
 
 @bot.command(name='deletesheet', help='Delete one of your character sheets')
-async def delete_sheet(ctx, sheet_id: int):
+async def delete_sheet(ctx, *, character_name: str):
     """Delete a character sheet"""
     session = Session()
     try:
-        sheet = session.query(CharacterSheet).filter_by(id=sheet_id).first()
-        if not sheet or sheet.user.discord_id != str(ctx.author.id):
-            await ctx.send("You can only delete your own character sheets.")
+        sheet = get_sheet_by_name(session, ctx, character_name)
+        if not sheet:
+            await ctx.send(f"Character sheet '{character_name}' not found or you do not have permission to delete it.")
             return
-        
-        character_name = sheet.character_name
-        
+
         # Delete associated shares
-        session.query(SharedSheet).filter_by(sheet_id=sheet_id).delete()
-        
-        # Delete the sheet
+        session.query(SharedSheet).filter_by(sheet_id=sheet.id).delete()
         session.delete(sheet)
         session.commit()
-        
         await ctx.send(f"✅ Character sheet '{character_name}' has been deleted.")
-        
     except Exception as e:
         await ctx.send(f"An error occurred: {str(e)}")
     finally:
@@ -358,6 +381,7 @@ async def help_starwars(ctx):
     `!roll <id> <skill/attribute>` - Roll dice for a skill or attribute
     `!deletesheet <id>` - Delete one of your character sheets
     `!listskills` - List all available skills by attribute
+    `!rolldice <dice code>` - Roll any WEG dice code (e.g., 4D+1)
     """
     
     embed.add_field(name="Commands", value=commands_text, inline=False)
@@ -432,6 +456,105 @@ async def list_skills(ctx):
         
     except Exception as e:
         await ctx.send(f"An error occurred: {str(e)}")
+
+@bot.command(name='updatesheet', help='Update an existing character sheet by name')
+async def updatesheet(ctx, *, character_name: str):
+    """Update a character sheet by uploading a new file or pasting new data"""
+    session = Session()
+    try:
+        sheet = get_sheet_by_name(session, ctx, character_name)
+        if not sheet:
+            await ctx.send(f"Sheet '{character_name}' not found or you do not have permission to update it.")
+            return
+
+        await ctx.send("Please upload the new character sheet file or paste the new data as your next message.")
+
+        def check(m):
+            return m.author == ctx.author and m.channel == ctx.channel
+
+        msg = await bot.wait_for('message', check=check, timeout=120)
+        if msg.attachments:
+            attachment = msg.attachments[0]
+            content = await attachment.read()
+            sheet_data = content.decode('utf-8')
+            filename = attachment.filename
+        else:
+            sheet_data = msg.content
+            filename = "input.txt"
+
+        # Parse the new sheet data
+        if sheet_data.strip().startswith('{'):
+            character = parser.parse_json_content(sheet_data)
+        else:
+            character = parser.parse_text_sheet(sheet_data)
+
+        # Update the sheet in the database
+        sheet.character_name = character.name
+        sheet.template = character.template
+        sheet.data = character.__dict__
+        session.commit()
+        await ctx.send(f"Character sheet '{sheet.character_name}' updated successfully!")
+    except Exception as e:
+        await ctx.send(f"Error updating character sheet: {str(e)}")
+    finally:
+        session.close()
+
+@bot.command(name='rolldice', help='Roll any WEG dice code (e.g., !rolldice 4D+1)')
+async def roll_dice_code(ctx, dice_code: str):
+    """Roll any WEG dice code without a character sheet"""
+    try:
+        result = dice_roller.roll(dice_code)
+        wild_die = result.get('wild_die_result')
+        total = result['total']
+
+        # Color and result formatting logic (exclusive if-elif chain)
+        embed_color = 0x0099ff  # fallback blue
+        result_str = f"**{total}**"  # Bold, default color
+
+        if wild_die == 1:
+            embed_color = 0xff0000  # Red
+        elif 1 <= total <= 5:
+            embed_color = 0xff69b4  # Pink
+        elif 6 <= total <= 10:
+            embed_color = 0x3399ff  # Blue
+        elif 11 <= total <= 15:
+            embed_color = 0x33cc33  # Green
+        elif 16 <= total <= 20:
+            embed_color = 0xffff00  # Yellow
+        elif 21 <= total <= 30:
+            embed_color = 0xffffff  # White
+        elif total > 30:
+            embed_color = 0x800080  # Purple
+
+        # If wild die is 6+, make the result numbers green text (using Discord markdown)
+        if wild_die and wild_die > 5:
+            result_str = f"```diff\n+{total}\n```"
+
+        embed = discord.Embed(
+            title=f"🎲 Dice Roll: {dice_code}",
+            color=embed_color
+        )
+        embed.add_field(name="Result", value=result_str, inline=True)
+        embed.add_field(name="Breakdown", value=result['breakdown'], inline=False)
+        await ctx.send(embed=embed)
+    except Exception as e:
+        await ctx.send(f"Error rolling dice: {str(e)}")
+
+def find_skill_key(skills_dict, skill):
+    """Find the correct skill key in the dict, regardless of underscores, spaces, or case."""
+    skill_variants = [
+        skill,
+        skill.lower(),
+        skill.lower().replace(' ', '_'),
+        skill.lower().replace('_', ' '),
+        skill.replace(' ', '_'),
+        skill.replace('_', ' ')
+    ]
+    for key in skills_dict:
+        for variant in skill_variants:
+            if key.lower() == variant.lower():
+                return key
+    return None
 
 # Error handling
 @bot.event

@@ -391,11 +391,12 @@ class WEGStarWarsParser:
     
     def get_skill_attribute(self, skill_name: str) -> str:
         """Get the governing attribute for a skill"""
-        skill_name = self._normalize_skill_name(skill_name)
+        normalized = self._normalize_skill_name(skill_name)
         for attribute, skills in self.skill_categories.items():
-            if skill_name in skills:
+            # Normalize each skill in the list for comparison
+            if any(self._normalize_skill_name(s) == normalized for s in skills):
                 return attribute
-        return 'dexterity'  # Default fallback
+        return None  # Or 'dexterity' as a fallback if you prefer
     
     def calculate_untrained_skill(self, character: StarWarsCharacter, skill_name: str) -> str:
         """Calculate dice code for untrained skill use"""
@@ -409,9 +410,9 @@ class WEGStarWarsParser:
         """Calculate dice code for untrained skill use from character data dict"""
         governing_attr = self.get_skill_attribute(skill_name)
         attr_dice = character_data.get('attributes', {}).get(governing_attr, '2D')
-        
-        # Untrained skills are at -1D penalty
-        return self._apply_dice_penalty(attr_dice, 1)
+
+        # No penalty for untrained skills
+        return attr_dice
     
     def _apply_dice_penalty(self, dice_code: str, penalty_dice: int) -> str:
         """Apply dice penalty to a dice code"""
