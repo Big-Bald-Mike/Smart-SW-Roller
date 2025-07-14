@@ -117,7 +117,7 @@ async def add_sheet(ctx, *, sheet_data=None):
         
         # Check if character with this name already exists for user
         existing = session.query(CharacterSheet).filter(
-            user_id=user.id, 
+            CharacterSheet.user_id == user.id,  # Now both are expression syntax
             CharacterSheet.character_name.ilike(character.name)
         ).first()
         
