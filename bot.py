@@ -59,15 +59,21 @@ def can_view_sheet(session, requesting_user_id, sheet_id):
     return False, sheet
 
 def get_sheet_by_name(session, ctx, character_name):
-    """Get a character sheet by name for the user or GM."""
+    """Get a character sheet by name for the user or GM (case insensitive)."""
     # Try to get the user's own sheet first
     user = get_or_create_user(session, ctx.author.id, ctx.author.name)
-    sheet = session.query(CharacterSheet).filter_by(user_id=user.id, character_name=character_name).first()
+    sheet = session.query(CharacterSheet).filter(
+        CharacterSheet.user_id == user.id,
+        CharacterSheet.character_name.ilike(character_name)
+    ).first()
     if sheet:
         return sheet
+    
     # If not found, allow GM to access any sheet by name
     if is_gm(ctx.author):
-        sheet = session.query(CharacterSheet).filter_by(character_name=character_name).first()
+        sheet = session.query(CharacterSheet).filter(
+            CharacterSheet.character_name.ilike(character_name)
+        ).first()
         return sheet
     return None
 
@@ -112,7 +118,7 @@ async def add_sheet(ctx, *, sheet_data=None):
         # Check if character with this name already exists for user
         existing = session.query(CharacterSheet).filter_by(
             user_id=user.id, 
-            character_name=character.name
+            CharacterSheet.character_name.ilike(character.name)
         ).first()
         
         if existing:
@@ -272,11 +278,14 @@ async def roll_dice(ctx, *, args):
             await ctx.send("User not found in database.")
             return
 
-        sheet = session.query(CharacterSheet).filter_by(user_id=user.id, character_name=character_name).first()
+        sheet = session.query(CharacterSheet).filter(
+            CharacterSheet.user_id == user.id,
+            CharacterSheet.character_name.ilike(character_name)
+        ).first()
         if not sheet:
             await ctx.send(f"Character '{character_name}' not found.")
             return
-        
+
         data = sheet.data
         skill_key = find_skill_key(data['skills'], skill)
         if skill_key:
